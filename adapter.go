@@ -90,11 +90,7 @@ func Adapter(opts ...Option) (func(http.Handler) http.Handler, error) {
 				writerPool.Put(gw)
 			}()
 
-			if _, ok := w.(http.CloseNotifier); ok {
-				w = compressWriterWithCloseNotify{gw}
-			} else {
-				w = gw
-			}
+			w = extend(gw)
 
 			h.ServeHTTP(w, r)
 		})

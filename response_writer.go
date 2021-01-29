@@ -1,10 +1,8 @@
 package httpcompression
 
 import (
-	"bufio"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -31,21 +29,6 @@ type compressWriter struct {
 var (
 	_ io.WriteCloser = &compressWriter{}
 	_ http.Flusher   = &compressWriter{}
-	_ http.Hijacker  = &compressWriter{}
-)
-
-type compressWriterWithCloseNotify struct {
-	*compressWriter
-}
-
-func (w compressWriterWithCloseNotify) CloseNotify() <-chan bool {
-	return w.ResponseWriter.(http.CloseNotifier).CloseNotify()
-}
-
-var (
-	_ io.WriteCloser = compressWriterWithCloseNotify{}
-	_ http.Flusher   = compressWriterWithCloseNotify{}
-	_ http.Hijacker  = compressWriterWithCloseNotify{}
 )
 
 const maxBuf = 1 << 16 // maximum size of recycled buffer
@@ -228,15 +211,6 @@ func (w *compressWriter) Flush() {
 	if fw, ok := w.ResponseWriter.(http.Flusher); ok {
 		fw.Flush()
 	}
-}
-
-// Hijack implements http.Hijacker. If the underlying ResponseWriter is a
-// Hijacker, its Hijack method is returned. Otherwise an error is returned.
-func (w *compressWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	if hj, ok := w.ResponseWriter.(http.Hijacker); ok {
-		return hj.Hijack()
-	}
-	return nil, nil, fmt.Errorf("http.Hijacker interface is not supported")
 }
 
 func (w *compressWriter) recycleBuffer() {
