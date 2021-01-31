@@ -977,6 +977,40 @@ func (w *discardResponseWriterWithWriteString) WriteString(s string) (n int, err
 	return len(s), nil
 }
 
+func TestWriteStringEquivalence(t *testing.T) {
+	t.Parallel()
+
+	for _, ae := range []string{"gzip", "uncompressed"} {
+		for _, ct := range []string{"text", "uncompressible"} {
+			t.Run(fmt.Sprintf("%s/%s", ae, ct), func(t *testing.T) {
+				r, _ := http.NewRequest("GET", "/", nil)
+				r.Header.Set("Accept-Encoding", ae)
+				a, _ := DefaultAdapter(ContentTypes([]string{"uncompressible"}, true))
+
+				var h http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", ct)
+					w.(interface{ WriteString(string) (int, error) }).WriteString(testBody)
+					w.(interface{ WriteString(string) (int, error) }).WriteString(testBody)
+				})
+				h = a(h)
+				ws := httptest.NewRecorder()
+				h.ServeHTTP(ws, r)
+
+				h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", ct)
+					w.Write([]byte(testBody))
+					w.Write([]byte(testBody))
+				})
+				h = a(h)
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, r)
+
+				assert.Equal(t, ws.Body.Bytes(), w.Body.Bytes(), "response body mismatch")
+			})
+		}
+	}
+}
+
 // --------------------------------------------------------------------
 
 func BenchmarkAdapter(b *testing.B) {
