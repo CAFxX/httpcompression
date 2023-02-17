@@ -3,7 +3,7 @@ module github.com/CAFxX/httpcompression
 go 1.11
 
 require (
-	github.com/andybalholm/brotli v1.0.4
+	github.com/andybalholm/brotli v1.0.5
 	github.com/google/brotli/go/cbrotli v0.0.0-20220512075048-9801a2c5d6c6
 	github.com/klauspost/compress v1.15.11
 	github.com/klauspost/pgzip v1.2.5
