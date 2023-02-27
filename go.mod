@@ -8,6 +8,6 @@ require (
 	github.com/klauspost/compress v1.15.11
 	github.com/klauspost/pgzip v1.2.5
 	github.com/pierrec/lz4/v4 v4.1.15
-	github.com/stretchr/testify v1.8.0
+	github.com/stretchr/testify v1.8.2
 	github.com/valyala/gozstd v1.17.0
 )
