@@ -26,6 +26,8 @@ type compressWriter struct {
 	enc  string
 	code int     // Saves the WriteHeader value.
 	buf  *[]byte // Holds the first part of the write before reaching the minSize or the end of the write.
+
+	bw bufio.Writer
 }
 
 var (
@@ -53,7 +55,7 @@ var (
 const maxBuf = 1 << 16 // maximum size of recycled buffer
 
 // Write compresses and appends the given byte slice to the underlying ResponseWriter.
-func (w *compressWriter) Write(b []byte) (int, error) {
+func (w *compressWriter) write(b []byte) (int, error) {
 	if w.w != nil {
 		// The responseWriter is already initialized: use it.
 		return w.w.Write(b)
@@ -126,25 +128,15 @@ func (w *compressWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// WriteString compresses and appends the given string to the underlying ResponseWriter.
-//
-// This makes use of an optional method (WriteString) exposed by the compressors, or by
-// the underlying ResponseWriter.
-func (w *compressWriter) WriteString(s string) (int, error) {
-	// Since WriteString is an optional interface of the compressor, and the actual compressor
-	// is chosen only after the first call to Write, we can't statically know whether the interface
-	// is supported. We therefore have to check dynamically.
-	if ws, _ := w.w.(io.StringWriter); ws != nil {
-		// The responseWriter is already initialized and it implements WriteString.
-		return ws.WriteString(s)
-	}
-	// Fallback: the writer has not been initialized yet, or it has been initialized
-	// and it does not implement WriteString. We could in theory do something unsafe
-	// here but for now let's keep it simple and fallback to Write.
-	// TODO: in case the string is large, we should avoid allocating a full copy:
-	// instead we should copy the string in chunks.
-	return w.Write([]byte(s))
-}
+type skipBuffer struct{ cw *compressWriter }
+
+func (w skipBuffer) Write(b []byte) (int, error) { return w.cw.write(b) }
+
+func (w *compressWriter) WriteString(s string) (int, error)   { return w.bw.WriteString(s) }
+func (w *compressWriter) Write(b []byte) (int, error)         { return w.bw.Write(b) }
+func (w *compressWriter) WriteRune(r rune) (int, error)       { return w.bw.WriteRune(r) }
+func (w *compressWriter) WriteByte(c byte) error              { return w.bw.WriteByte(c) }
+func (w *compressWriter) ReadFrom(r io.Reader) (int64, error) { return w.bw.ReadFrom(r) }
 
 // startCompress initializes a compressing writer and writes the buffer.
 func (w *compressWriter) startCompress(enc string, buf []byte) error {
@@ -229,6 +221,8 @@ func (w *compressWriter) WriteHeader(code int) {
 
 // Close closes the compression Writer.
 func (w *compressWriter) Close() error {
+	w.bw.Flush()
+
 	if w.w != nil && w.enc == "" {
 		return nil
 	}
@@ -257,11 +251,14 @@ func (w *compressWriter) Close() error {
 // response should be compressed or not (e.g. less than MinSize bytes have
 // been written).
 func (w *compressWriter) Flush() {
-	if w.w == nil {
+	if w.w == nil || (w.w == nil && w.bw.Buffered() < minBufferSize) {
 		// Flush is thus a no-op until we're certain whether a plain
 		// or compressed response will be served.
 		return
 	}
+
+	// Flush the bufio.Writer.
+	w.bw.Flush()
 
 	// Flush the compressor, if supported.
 	// note: http.ResponseWriter does not implement Flusher (http.Flusher does not return an error),
