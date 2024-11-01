@@ -28,13 +28,13 @@ type PreferType byte
 const (
 	// PreferServer prefers compressors in the order specified on the server.
 	// If two or more compressors have the same priority on the server, the client preference is taken into consideration.
-	// If both server and client do no specify a preference between two or more compressors, the order is determined by the name of the encoding.
+	// If both server and client do not specify a preference between two or more compressors, the order is determined by the name of the encoding.
 	// PreferServer is the default.
 	PreferServer PreferType = iota
 
 	// PreferClient prefers compressors in the order specified by the client.
 	// If two or more compressors have the same priority according to the client, the server priority is taken into consideration.
-	// If both server and client do no specify a preference between two or more compressors, the order is determined by the name of the encoding.
+	// If both server and client do not specify a preference between two or more compressors, the order is determined by the name of the encoding.
 	PreferClient
 )
 

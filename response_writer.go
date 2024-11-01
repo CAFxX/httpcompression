@@ -10,17 +10,24 @@ import (
 	"sync"
 )
 
-// compressWriter provides an http.ResponseWriter interface, which gzips
+var (
+	// ErrHijackerNotSupported indicates that a provided http.ResponseWriter does not implement
+	// http.Hijacker and can be therefore not be called by wrapped responses.
+	ErrHijackerNotSupported = fmt.Errorf("http.Hijacker interface is not supported")
+)
+
+// compressWriter provides a http.ResponseWriter interface, which gzips
 // bytes before writing them to the underlying response. This doesn't close the
 // writers, so don't forget to do that.
 // It can be configured to skip response smaller than minSize.
 type compressWriter struct {
 	http.ResponseWriter
 
-	config config
-	accept codings
-	common []string
-	pool   *sync.Pool // pool of buffers (buf []byte); max size of each buf is maxBuf
+	config  *config
+	minSize int
+	accept  codings
+	common  []string
+	pool    *sync.Pool // pool of buffers (buf []byte); max size of each buf is maxBuf
 
 	w    io.Writer
 	enc  string
@@ -52,6 +59,27 @@ var (
 
 const maxBuf = 1 << 16 // maximum size of recycled buffer
 
+func (w *compressWriter) configure(
+	rw http.ResponseWriter,
+	minSize int,
+	accept codings,
+	common []string,
+) {
+	w.ResponseWriter = rw
+	w.minSize = minSize
+	w.accept = accept
+	w.common = common
+	w.w = nil
+}
+
+func (w *compressWriter) clean() {
+	w.ResponseWriter = nil
+	w.minSize = 0
+	w.accept = nil
+	w.common = nil
+	w.w = nil
+}
+
 // Write compresses and appends the given byte slice to the underlying ResponseWriter.
 func (w *compressWriter) Write(b []byte) (int, error) {
 	if w.w != nil {
@@ -71,8 +99,8 @@ func (w *compressWriter) Write(b []byte) (int, error) {
 	// Fast path: we have enough information to know whether we will compress
 	// or not this response from the first write, so we don't need to buffer
 	// writes to defer the decision until we have more data.
-	if w.buf == nil && (ct != "" || len(w.config.contentTypes) == 0) && (cl > 0 || len(b) >= w.config.minSize) {
-		if ce == "" && (cl >= w.config.minSize || len(b) >= w.config.minSize) && handleContentType(ct, w.config.contentTypes, w.config.blacklist) {
+	if w.buf == nil && (ct != "" || len(w.config.contentTypes) == 0) && (cl > 0 || len(b) >= w.minSize) {
+		if ce == "" && (cl >= w.minSize || len(b) >= w.minSize) && handleContentType(ct, w.config.contentTypes, w.config.blacklist) {
 			enc := preferredEncoding(w.accept, w.config.compressor, w.common, w.config.prefer)
 			if err := w.startCompress(enc, b); err != nil {
 				return 0, err
@@ -93,19 +121,19 @@ func (w *compressWriter) Write(b []byte) (int, error) {
 	*w.buf = append(*w.buf, b...)
 
 	// Only continue if they didn't already choose an encoding or a known unhandled content length or type.
-	if ce == "" && (cl == 0 || cl >= w.config.minSize) && (ct == "" || handleContentType(ct, w.config.contentTypes, w.config.blacklist)) {
+	if ce == "" && (cl == 0 || cl >= w.minSize) && (ct == "" || handleContentType(ct, w.config.contentTypes, w.config.blacklist)) {
 		// If the current buffer is less than minSize and a Content-Length isn't set, then wait until we have more data.
-		if len(*w.buf) < w.config.minSize && cl == 0 {
+		if len(*w.buf) < w.minSize && cl == 0 {
 			return len(b), nil
 		}
 		// If the Content-Length is larger than minSize or the current buffer is larger than minSize, then continue.
-		if cl >= w.config.minSize || len(*w.buf) >= w.config.minSize {
+		if cl >= w.minSize || len(*w.buf) >= w.minSize {
 			// If a Content-Type wasn't specified, infer it from the current buffer.
 			if ct == "" {
 				ct = http.DetectContentType(*w.buf)
 				if ct != "" {
 					// net/http by default performs content sniffing but this is disabled if content-encoding is set.
-					// Since we set content-encoding, if content-type was not set and we successfully sniffed it,
+					// Since we set content-encoding, if content-type was not set, and we successfully sniffed it,
 					// set the content-type.
 					w.Header().Set(contentType, ct)
 				}
@@ -210,9 +238,9 @@ func (w *compressWriter) startPlain(buf []byte) error {
 		return nil
 	}
 	n, err := w.ResponseWriter.Write(buf)
-	// This should never happen (per io.Writer docs), but if the write didn't
-	// accept the entire buffer but returned no specific error, we have no clue
-	// what's going on, so abort just to be safe.
+	// This should never happen (per io.Writer docs), but if the write operation
+	// didn't accept the entire buffer but returned no specific error, we have no
+	// clue what's going on, so abort just to be safe.
 	if err == nil && n < len(buf) {
 		err = io.ErrShortWrite
 	}
@@ -251,8 +279,8 @@ func (w *compressWriter) Close() error {
 }
 
 // Flush flushes the underlying compressor Writer and then the underlying
-// http.ResponseWriter if it is an http.Flusher. This makes compressWriter
-// an http.Flusher.
+// http.ResponseWriter if it is a http.Flusher. This makes compressWriter
+// a http.Flusher.
 // Flush is a no-op until enough data has been written to decide whether the
 // response should be compressed or not (e.g. less than MinSize bytes have
 // been written).
@@ -269,7 +297,7 @@ func (w *compressWriter) Flush() {
 	// - in case we are bypassing compression, w.w is the parent ResponseWriter, and therefore we skip
 	//   this as the parent ResponseWriter does not implement Flusher.
 	// - in case we are NOT bypassing compression, w.w is the compressor, and therefore we flush the
-	//   compressor and then we flush the parent ResponseWriter.
+	//   compressor, and then we flush the parent ResponseWriter.
 	if fw, ok := w.w.(Flusher); ok {
 		_ = fw.Flush()
 	}
@@ -281,21 +309,16 @@ func (w *compressWriter) Flush() {
 }
 
 // Hijack implements http.Hijacker. If the underlying ResponseWriter is a
-// Hijacker, its Hijack method is returned. Otherwise an error is returned.
+// Hijacker, its Hijack method is returned. Otherwise, an error is returned.
 func (w *compressWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if hj, ok := w.ResponseWriter.(http.Hijacker); ok {
 		return hj.Hijack()
 	}
-	return nil, nil, fmt.Errorf("http.Hijacker interface is not supported")
+	return nil, nil, ErrHijackerNotSupported
 }
 
 func (w *compressWriter) getBuffer() *[]byte {
-	b := w.pool.Get()
-	if b == nil {
-		var s []byte
-		return &s
-	}
-	return b.(*[]byte)
+	return w.pool.Get().(*[]byte)
 }
 
 func (w *compressWriter) recycleBuffer() {

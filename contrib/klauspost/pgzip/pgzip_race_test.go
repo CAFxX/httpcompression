@@ -1,4 +1,4 @@
-// +build race
+//go:build race
 
 package pgzip_test
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,16 +16,10 @@ import (
 	"testing"
 
 	"github.com/CAFxX/httpcompression/contrib/andybalholm/brotli"
-	"github.com/CAFxX/httpcompression/contrib/google/cbrotli"
-	kpgzip "github.com/CAFxX/httpcompression/contrib/klauspost/gzip"
-	"github.com/CAFxX/httpcompression/contrib/klauspost/zstd"
-	"github.com/CAFxX/httpcompression/contrib/valyala/gozstd"
 	"github.com/stretchr/testify/assert"
 
 	ibrotli "github.com/andybalholm/brotli"
-	gcbrotli "github.com/google/brotli/go/cbrotli"
 	kpzstd "github.com/klauspost/compress/zstd"
-	vzstd "github.com/valyala/gozstd"
 )
 
 const (
@@ -398,7 +393,7 @@ func TestNewGzipLevelHandler(t *testing.T) {
 	})
 
 	for lvl := gzip.BestSpeed; lvl <= gzip.BestCompression; lvl++ {
-		wrapper, err := DefaultAdapter(GzipCompressionLevel(lvl))
+		adapter, err := DefaultAdapter(GzipCompressionLevel(lvl))
 		if !assert.Nil(t, err, "NewGzipLevleHandler returned error for level:", lvl) {
 			continue
 		}
@@ -406,7 +401,7 @@ func TestNewGzipLevelHandler(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/whatever", nil)
 		req.Header.Set("Accept-Encoding", "gzip")
 		resp := httptest.NewRecorder()
-		wrapper(handler).ServeHTTP(resp, req)
+		adapter(handler).ServeHTTP(resp, req)
 		res := resp.Result()
 
 		assert.Equal(t, 200, res.StatusCode)
@@ -571,8 +566,50 @@ func TestGzipHandlerMinSize(t *testing.T) {
 	responseLength := 0
 	b := []byte{'x'}
 
-	wrapper, _ := DefaultAdapter(MinSize(128))
-	handler := wrapper(http.HandlerFunc(
+	adapter, _ := DefaultAdapter(MinSize(128))
+	handler := adapter(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			// Write responses one byte at a time to ensure that the flush
+			// mechanism, if used, is working properly.
+			for i := 0; i < responseLength; i++ {
+				n, err := w.Write(b)
+				assert.Equal(t, 1, n)
+				assert.Nil(t, err)
+			}
+		},
+	))
+
+	r, _ := http.NewRequest("GET", "/whatever", &bytes.Buffer{})
+	r.Header.Add("Accept-Encoding", "gzip")
+
+	// Short response is not compressed
+	responseLength = 127
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Result().Header.Get(contentEncoding) == "gzip" {
+		t.Error("Expected uncompressed response, got compressed")
+	}
+
+	// Long response is compressed
+	responseLength = 128
+	b = []byte{'y'}
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Result().Header.Get(contentEncoding) != "gzip" {
+		t.Error("Expected compressed response, got uncompressed")
+	}
+}
+
+func TestGzipHandlerMinSizeRequestFunc(t *testing.T) {
+	t.Parallel()
+
+	responseLength := 0
+	b := []byte{'x'}
+
+	adapter, _ := DefaultAdapter(MinSizeRequestFunc(func(req *http.Request) (int, error) {
+		return 128, nil
+	}))
+	handler := adapter(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			// Write responses one byte at a time to ensure that the flush
 			// mechanism, if used, is working properly.
@@ -604,6 +641,30 @@ func TestGzipHandlerMinSize(t *testing.T) {
 	}
 }
 
+func TestFailGzipHandlerMinSizeRequestFunc(t *testing.T) {
+	t.Parallel()
+
+	expectedError := errors.New("expected")
+	var actualError error
+	adapter, _ := DefaultAdapter(
+		MinSizeRequestFunc(func(req *http.Request) (int, error) {
+			return 0, expectedError
+		}),
+		ErrorHandler(func(_ http.ResponseWriter, _ *http.Request, err error) {
+			actualError = err
+		}),
+	)
+
+	handler := adapter(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	r, _ := http.NewRequest("GET", "/whatever", &bytes.Buffer{})
+	r.Header.Add("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, r)
+
+	assert.ErrorIs(t, actualError, expectedError)
+}
+
 type panicOnSecondWriteHeaderWriter struct {
 	http.ResponseWriter
 	headerWritten bool
@@ -628,7 +689,7 @@ func TestGzipHandlerDoubleWriteHeader(t *testing.T) {
 		// Ensure that after a Write the header isn't triggered again on close
 		w.Write(nil)
 	}))
-	wrapper := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adapter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w = &panicOnSecondWriteHeaderWriter{
 			ResponseWriter: w,
 		}
@@ -647,7 +708,7 @@ func TestGzipHandlerDoubleWriteHeader(t *testing.T) {
 		Header:     make(http.Header),
 	}
 	req.Header.Set("Accept-Encoding", "gzip")
-	wrapper.ServeHTTP(rec, req)
+	adapter.ServeHTTP(rec, req)
 	body, err := io.ReadAll(rec.Body)
 	if err != nil {
 		t.Fatalf("Unexpected error reading response body: %v", err)
@@ -666,7 +727,7 @@ func TestGzipHandlerDoubleVary(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(testBody))
 	}))
-	wrapper := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adapter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "accept-encoding")
 		w.Header().Add("Vary", "X-Something")
 		handler.ServeHTTP(w, r)
@@ -675,7 +736,7 @@ func TestGzipHandlerDoubleVary(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
-	wrapper.ServeHTTP(rec, req)
+	adapter.ServeHTTP(rec, req)
 	body, err := io.ReadAll(rec.Body)
 	if err != nil {
 		t.Fatalf("Unexpected error reading response body: %v", err)
@@ -926,7 +987,7 @@ func TestContentTypes(t *testing.T) {
 			io.WriteString(w, testBody)
 		})
 
-		wrapper, err := DefaultAdapter(ContentTypes(tt.acceptedContentTypes, false))
+		adapter, err := DefaultAdapter(ContentTypes(tt.acceptedContentTypes, false))
 		if !assert.Nil(t, err, "NewGzipHandlerWithOpts returned error", tt.name) {
 			continue
 		}
@@ -934,7 +995,7 @@ func TestContentTypes(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/whatever", nil)
 		req.Header.Set("Accept-Encoding", "gzip")
 		resp := httptest.NewRecorder()
-		wrapper(handler).ServeHTTP(resp, req)
+		adapter(handler).ServeHTTP(resp, req)
 		res := resp.Result()
 
 		assert.Equal(t, 200, res.StatusCode)
@@ -1114,14 +1175,14 @@ func TestAcceptRanges(t *testing.T) {
 				w.Write([]byte(c.body))
 			})
 
-			wrapper, err := DefaultAdapter(ContentTypes([]string{"text/plain"}, false))
+			adapter, err := DefaultAdapter(ContentTypes([]string{"text/plain"}, false))
 			assert.Nil(t, err, "DefaultAdapter returned error")
 
 			req, _ := http.NewRequest("GET", "/", nil)
 			req.Header.Set("Accept-Encoding", c.acceptEncoding)
 			req.Header.Set("Range", c._range)
 			resp := httptest.NewRecorder()
-			wrapper(handler).ServeHTTP(resp, req)
+			adapter(handler).ServeHTTP(resp, req)
 			res := resp.Result()
 
 			assert.Equal(t, 200, res.StatusCode)
@@ -1143,13 +1204,13 @@ func TestShortFirstWrite(t *testing.T) {
 		assert.Nil(t, err)
 	})
 
-	wrapper, err := DefaultAdapter()
+	adapter, err := DefaultAdapter()
 	assert.Nil(t, err, "DefaultAdapter returned error")
 
 	req, _ := http.NewRequest("GET", "/", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	resp := httptest.NewRecorder()
-	wrapper(handler).ServeHTTP(resp, req)
+	adapter(handler).ServeHTTP(resp, req)
 	res := resp.Result()
 
 	assert.Equal(t, 200, res.StatusCode)
@@ -1160,6 +1221,26 @@ func TestShortFirstWrite(t *testing.T) {
 	assert.Equal(t, testBody, string(buf))
 }
 
+func TestErrorHandler(t *testing.T) {
+	t.Parallel()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte{'x'})
+	})
+	expectedError := errors.New("expected")
+	var recordedError error
+	adapter, err := DefaultAdapter(ErrorHandler(func(_ http.ResponseWriter, _ *http.Request, err error) {
+		recordedError = err
+	}))
+	assert.Nil(t, err, "DefaultAdapter returned error")
+
+	req, _ := http.NewRequest("GET", "/", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp := &errorThrowingResponseWriter{expectedError}
+	adapter(handler).ServeHTTP(resp, req)
+	assert.Errorf(t, recordedError, "httpcompression: write to regular responseWriter at close gets error: %v", expectedError)
+}
+
 // --------------------------------------------------------------------
 
 const (
@@ -1167,13 +1248,12 @@ const (
 	googleCbrotli     = "google-cbrotli"
 	andybalholmBrotli = "andybalholm-brotli"
 	klauspostGzip     = "klauspost-gzip"
-	klauspostPgzip    = "klauspost-pgzip"
 	klauspostZstd     = "klauspost-zstd"
 	valyalaGozstd     = "valyala-gozstd"
 )
 
 func BenchmarkAdapter(b *testing.B) {
-	comps := map[string]int{stdlibGzip: 9, klauspostGzip: 9, andybalholmBrotli: 11, googleCbrotli: 11, klauspostZstd: 4, valyalaGozstd: 22}
+	comps := benchMarkComps
 	sizes := []int{100, 1000, 10000, 100000}
 	if testing.Short() {
 		comps = map[string]int{stdlibGzip: 9, andybalholmBrotli: 11}
@@ -1235,21 +1315,7 @@ func benchmark(b *testing.B, parallel bool, size int, ae string, d int) {
 		b.Fatal(err)
 	}
 
-	var enc CompressorProvider
-	switch ae {
-	case stdlibGzip:
-		enc, err = NewDefaultGzipCompressor(d)
-	case klauspostGzip:
-		enc, err = kpgzip.New(kpgzip.Options{Level: d})
-	case andybalholmBrotli:
-		enc, err = brotli.New(brotli.Options{Quality: d})
-	case googleCbrotli:
-		enc, err = cbrotli.New(gcbrotli.WriterOptions{Quality: d})
-	case klauspostZstd:
-		enc, err = zstd.New(kpzstd.WithEncoderLevel(kpzstd.EncoderLevel(d)))
-	case valyalaGozstd:
-		enc, err = gozstd.New(vzstd.WriterParams{CompressionLevel: d})
-	}
+	enc, err := benchmarkCompressorProvider(ae, d)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1347,3 +1413,17 @@ func decodeGzip(i io.Reader) ([]byte, error) {
 	}
 	return io.ReadAll(r)
 }
+
+type errorThrowingResponseWriter struct {
+	errorToThrow error
+}
+
+func (w *errorThrowingResponseWriter) Header() http.Header {
+	return map[string][]string{}
+}
+
+func (w *errorThrowingResponseWriter) Write([]byte) (int, error) {
+	return 0, w.errorToThrow
+}
+
+func (w *errorThrowingResponseWriter) WriteHeader(int) {}
