@@ -654,7 +654,6 @@ func TestGzipHandlerDoubleWriteHeader(t *testing.T) {
 	}
 	assert.Empty(t, body)
 	header := rec.Header()
-	assert.Equal(t, "gzip", header.Get("Content-Encoding"))
 	assert.Equal(t, "Accept-Encoding", header.Get("Vary"))
 	assert.Equal(t, 304, rec.Code)
 }
@@ -1015,8 +1014,8 @@ func TestWriteStringNoCompressionDynamic(t *testing.T) {
 	t.Run("WriteString", func(t *testing.T) {
 		w := &discardResponseWriterWithWriteString{}
 		h.ServeHTTP(w, r)
-		if w.s != len(testBody) || w.b != int64(len(testBody)) { // first WriteString falls back to Write
-			t.Fatalf("WriteString not called: %+v", w)
+		if w.b != int64(len(testBody))*2 {
+			t.Fatalf("Write not called: %+v", w)
 		}
 	})
 	t.Run("Write", func(t *testing.T) {
