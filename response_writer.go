@@ -35,21 +35,6 @@ var (
 	_ io.StringWriter = &compressWriter{}
 )
 
-type compressWriterWithCloseNotify struct {
-	*compressWriter
-}
-
-func (w compressWriterWithCloseNotify) CloseNotify() <-chan bool {
-	return w.ResponseWriter.(http.CloseNotifier).CloseNotify()
-}
-
-var (
-	_ io.WriteCloser  = compressWriterWithCloseNotify{}
-	_ http.Flusher    = compressWriterWithCloseNotify{}
-	_ http.Hijacker   = compressWriterWithCloseNotify{}
-	_ io.StringWriter = compressWriterWithCloseNotify{}
-)
-
 const maxBuf = 1 << 16 // maximum size of recycled buffer
 
 // Write compresses and appends the given byte slice to the underlying ResponseWriter.
@@ -252,31 +237,14 @@ func (w *compressWriter) Close() error {
 
 // Flush flushes the underlying compressor Writer and then the underlying
 // http.ResponseWriter if it is an http.Flusher. This makes compressWriter
-// an http.Flusher.
-// Flush is a no-op until enough data has been written to decide whether the
-// response should be compressed or not (e.g. less than MinSize bytes have
-// been written).
+// an http.Flusher. Flush is a no-op until the compress writer is initialized.
 func (w *compressWriter) Flush() {
 	if w.w == nil {
-		// Flush is thus a no-op until we're certain whether a plain
-		// or compressed response will be served.
 		return
 	}
-
-	// Flush the compressor, if supported.
-	// note: http.ResponseWriter does not implement Flusher (http.Flusher does not return an error),
-	// so we need to later call ResponseWriter.Flush anyway:
-	// - in case we are bypassing compression, w.w is the parent ResponseWriter, and therefore we skip
-	//   this as the parent ResponseWriter does not implement Flusher.
-	// - in case we are NOT bypassing compression, w.w is the compressor, and therefore we flush the
-	//   compressor and then we flush the parent ResponseWriter.
-	if fw, ok := w.w.(Flusher); ok {
-		_ = fw.Flush()
-	}
-
-	// Flush the ResponseWriter (the previous Flusher is not expected to flush the parent writer).
-	if fw, ok := w.ResponseWriter.(http.Flusher); ok {
-		fw.Flush()
+	// Flush the compressor and then the underlying http.ResponseWriter.
+	if f, ok := w.w.(http.Flusher); ok {
+		f.Flush()
 	}
 }
 
@@ -316,3 +284,4 @@ func (w *compressWriter) recycleBuffer() {
 	}
 	w.pool.Put(buf)
 }
+
