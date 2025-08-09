@@ -9,20 +9,10 @@ type CompressorProvider interface {
 	// Get returns a writer that writes compressed output to the supplied parent io.Writer.
 	// Callers of Get() must ensure to always call Close() when the compressor is not needed
 	// anymore. Callers of Close() must also ensure to not use the io.WriteCloser once Close()
-	// is called.
-	// Implementations of CompressorProvider are allowed to recycle the compressor (e.g. put the
-	// WriteCloser in a pool to be reused by a later call to Get) when Close() is called.
-	// The returned io.WriteCloser can optionally implement the Flusher interface if it is
-	// able to flush data buffered internally.
+	// is called. Implementations of CompressorProvider are allowed to recycle the compressor
+	// (e.g. put the WriteCloser in a pool to be reused by a later call to Get) when
+	// Close() is called.
 	Get(parent io.Writer) (compressor io.WriteCloser)
-}
-
-// Flusher is an optional interface that can be implemented by the compressors returned by
-// CompressorProvider.Get().
-type Flusher interface {
-	// Flush flushes the data buffered internally by the Writer.
-	// Implementations of Flush do not need to internally flush the parent Writer.
-	Flush() error
 }
 
 // Compressor returns an Option that sets the CompressorProvider for a specific Content-Encoding.
@@ -41,3 +31,4 @@ func Compressor(contentEncoding string, priority int, compressor CompressorProvi
 		return nil
 	}
 }
+
