@@ -53,7 +53,7 @@ func parseEncodings(vv []string) codings {
 	return c
 }
 
-// parseCoding parses a single conding (content-coding with an optional qvalue),
+// parseCoding parses a single coding (content-coding with an optional qvalue),
 // as might appear in an Accept-Encoding header. It attempts to forgive minor
 // formatting errors.
 func parseCoding(s string) (coding string, qvalue float64) {

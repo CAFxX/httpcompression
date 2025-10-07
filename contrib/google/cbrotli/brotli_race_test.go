@@ -1,5 +1,4 @@
-//go:build race
-// +build race
+//go:build race && cgo
 
 package cbrotli_test
 
