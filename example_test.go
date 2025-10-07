@@ -29,7 +29,7 @@ func Example() {
 	// ...
 }
 
-func ExampleCustom() {
+func Example_custom() {
 	brEnc, err := brotli.New(brotli.Options{})
 	if err != nil {
 		log.Fatal(err)
@@ -51,7 +51,7 @@ func ExampleCustom() {
 	)
 }
 
-func ExampleWithDictionary() {
+func Example_withDictionary() {
 	// Default zstd compressor
 	zEnc, err := zstd.New()
 	if err != nil {
@@ -111,10 +111,10 @@ func readZstdDictionary(file string) (dict []byte, coding string, err error) {
 	return
 }
 
-// ExampleCustomCompressor shows how to create an httpcompression adapter with a custom compressor.
+// Example_customCompressor shows how to create an httpcompression adapter with a custom compressor.
 // In this case we use the pierrec/lz4 compressor in contrib, but it could be replaced with any
 // other compressor, as long as it implements the CompressorProvider interface.
-func ExampleCustomCompressor() {
+func Example_customCompressor() {
 	c, err := lz4.New()
 	if err != nil {
 		log.Fatal(err)
