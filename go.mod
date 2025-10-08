@@ -10,7 +10,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/stretchr/testify v1.11.1
 	github.com/ulikunitz/xz v0.5.14
-	github.com/valyala/gozstd v1.21.2
+	github.com/valyala/gozstd v1.23.2
 )
 
 require (
