@@ -5,7 +5,7 @@ go 1.23.0
 require (
 	github.com/CAFxX/httpcompression v0.0.8
 	github.com/gin-gonic/gin v1.9.1
-	github.com/turtlemonvh/gin-wraphh v0.0.0-20160304035037-ea8e4927b3a6
+	github.com/scr-oath/gin-wraphh v0.0.0-20250205052857-624904308e7f // 7-fix-writer branch
 )
 
 require (
