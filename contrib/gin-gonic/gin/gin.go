@@ -3,7 +3,7 @@ package gin
 import (
 	"github.com/CAFxX/httpcompression"
 	"github.com/gin-gonic/gin"
-	wraphh "github.com/turtlemonvh/gin-wraphh"
+	wraphh "github.com/scr-oath/gin-wraphh"
 )
 
 func Adapter(opts ...httpcompression.Option) (gin.HandlerFunc, error) {
