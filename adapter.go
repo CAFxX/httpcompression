@@ -1,6 +1,7 @@
 package httpcompression // import "github.com/CAFxX/httpcompression"
 
 import (
+	"bufio"
 	"compress/gzip"
 	"fmt"
 	"net/http"
@@ -35,6 +36,9 @@ const (
 	// In general there can be no one-size-fits-all value: you will want to measure if a different
 	// minimum size improves end-to-end performance for your workloads.
 	DefaultMinSize = 200
+
+	DefaultBufferSize = 4096
+	minBufferSize     = 512
 )
 
 // Adapter returns a HTTP handler wrapping function (a.k.a. middleware)
@@ -62,6 +66,10 @@ func Adapter(opts ...Option) (func(http.Handler) http.Handler, error) {
 		return func(h http.Handler) http.Handler {
 			return h
 		}, nil
+	}
+
+	if c.bufferSize < minBufferSize {
+		c.bufferSize = minBufferSize
 	}
 
 	bufPool := &sync.Pool{}
@@ -92,6 +100,7 @@ func Adapter(opts ...Option) (func(http.Handler) http.Handler, error) {
 			gw, _ := writerPool.Get().(*compressWriter)
 			if gw == nil {
 				gw = &compressWriter{}
+				gw.bw = *bufio.NewWriterSize(skipBuffer{gw}, c.bufferSize)
 			}
 			*gw = compressWriter{
 				ResponseWriter: w,
@@ -99,6 +108,7 @@ func Adapter(opts ...Option) (func(http.Handler) http.Handler, error) {
 				accept:         accept,
 				common:         common,
 				pool:           bufPool,
+				bw:             gw.bw,
 			}
 			defer func() {
 				// Important: gw.Close() must be called *always*, as this will
@@ -106,9 +116,10 @@ func Adapter(opts ...Option) (func(http.Handler) http.Handler, error) {
 				// it is guaranteed by the CompressorProvider interface, and
 				// because some compressors may be implemented via cgo, and they
 				// may rely on Close() being called to release memory resources.
-				// TODO: expose the error
-				_ = gw.Close() // expose the error
-				*gw = compressWriter{}
+				_ = gw.Close() // TODO: expose the error
+				*gw = compressWriter{
+					bw: gw.bw,
+				}
 				writerPool.Put(gw)
 			}()
 
@@ -145,6 +156,7 @@ func DefaultAdapter(opts ...Option) (func(http.Handler) http.Handler, error) {
 		BrotliCompressionLevel(brotli.DefaultCompression),
 		defaultZstandardCompressor(),
 		MinSize(DefaultMinSize),
+		BufferSize(DefaultBufferSize),
 	}
 	opts = append(defaults, opts...)
 	return Adapter(opts...)
@@ -157,6 +169,7 @@ type config struct {
 	blacklist    bool
 	prefer       PreferType
 	compressor   comps
+	bufferSize   int
 }
 
 type comps map[string]comp
@@ -177,6 +190,16 @@ func MinSize(size int) Option {
 			return fmt.Errorf("minimum size can not be negative: %d", size)
 		}
 		c.minSize = size
+		return nil
+	}
+}
+
+func BufferSize(size int) Option {
+	return func(c *config) error {
+		if size < 0 {
+			return fmt.Errorf("buffer size can not be negative: %d", size)
+		}
+		c.bufferSize = size
 		return nil
 	}
 }
